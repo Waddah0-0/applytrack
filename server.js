@@ -4,6 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const { simpleParser } = require('mailparser');
 const imaps = require('imap-simple');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -16,10 +20,44 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 const DB_FILE = path.join(__dirname, 'database.json');
 
-// Initialize database file
-const mongoose = require('mongoose');
+// Secrets & Keys
+const JWT_SECRET = process.env.JWT_SECRET || 'applytrack_jwt_secret_999';
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'applytrack_secure_key_123_456789';
+
+// Derive 32-byte key securely for AES-256-CBC
+const getCryptoKey = () => {
+  return crypto.createHash('sha256').update(ENCRYPTION_KEY).digest();
+};
+
+// AES-256-CBC Symmetric Encryption Helpers
+function encrypt(text) {
+  if (!text) return '';
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', getCryptoKey(), iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decrypt(text) {
+  if (!text) return '';
+  try {
+    const parts = text.split(':');
+    if (parts.length !== 2) return text; // Fallback to raw if not encrypted yet
+    const iv = Buffer.from(parts[0], 'hex');
+    const encryptedText = Buffer.from(parts[1], 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', getCryptoKey(), iv);
+    let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (err) {
+    console.error('Decryption failed, returning raw:', err.message);
+    return text;
+  }
+}
 
 // Mongoose Models
+let UserModel;
 let SettingsModel;
 let TrackedJobModel;
 let isMongoConnected = false;
@@ -32,9 +70,16 @@ async function connectMongo() {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log('🔌 Connected to MongoDB Atlas Cloud Database!');
     
+    const userSchema = new mongoose.Schema({
+      email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+      password: { type: String, required: true },
+      createdAt: { type: Date, default: Date.now }
+    });
+
     const settingsSchema = new mongoose.Schema({
+      userId: { type: String, required: true, unique: true },
       email: { type: String, default: '' },
-      password: { type: String, default: '' },
+      password: { type: String, default: '' }, // Encrypted
       host: { type: String, default: 'imap.gmail.com' },
       port: { type: Number, default: 993 },
       tls: { type: Boolean, default: true },
@@ -44,7 +89,8 @@ async function connectMongo() {
     });
     
     const trackedJobSchema = new mongoose.Schema({
-      id: { type: String, required: true, unique: true },
+      userId: { type: String, required: true },
+      id: { type: String, required: true },
       company: { type: String, required: true },
       role: { type: String, required: true },
       status: { type: String, default: 'Applied' },
@@ -54,7 +100,9 @@ async function connectMongo() {
       createdAt: { type: String },
       updatedAt: { type: String }
     });
+    trackedJobSchema.index({ userId: 1, id: 1 }, { unique: true });
     
+    UserModel = mongoose.models.User || mongoose.model('User', userSchema);
     SettingsModel = mongoose.models.Settings || mongoose.model('Settings', settingsSchema);
     TrackedJobModel = mongoose.models.TrackedJob || mongoose.model('TrackedJob', trackedJobSchema);
     
@@ -69,32 +117,24 @@ async function connectMongo() {
 function initDb() {
   if (!fs.existsSync(DB_FILE)) {
     const initialDb = {
-      settings: {
-        email: '',
-        password: '',
-        host: 'imap.gmail.com',
-        port: 993,
-        tls: true,
-        daysToFetch: 30,
-        limit: 100,
-        demoMode: true
-      },
-      trackedJobs: []
+      localUsers: [],
+      users: {}
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(initialDb, null, 2), 'utf8');
   }
 }
 initDb();
 
-// Asynchronous DB reader with MongoDB fallback
-async function readDb() {
+// Asynchronous DB reader isolated by userId
+async function readDb(userId) {
   const isMongo = await connectMongo();
   
   if (isMongo) {
     try {
-      let settingsDoc = await SettingsModel.findOne();
+      let settingsDoc = await SettingsModel.findOne({ userId });
       if (!settingsDoc) {
         settingsDoc = await SettingsModel.create({
+          userId,
           email: '',
           password: '',
           host: 'imap.gmail.com',
@@ -105,54 +145,106 @@ async function readDb() {
           demoMode: true
         });
       }
-      const jobsDocs = await TrackedJobModel.find();
+      const jobsDocs = await TrackedJobModel.find({ userId });
+      
+      const settings = settingsDoc.toObject();
+      if (settings.password) {
+        settings.password = decrypt(settings.password);
+      }
+      
       return {
-        settings: settingsDoc.toObject(),
+        settings,
         trackedJobs: jobsDocs.map(j => j.toObject())
       };
     } catch (err) {
-      console.error('Error reading from MongoDB:', err);
-      return { settings: {}, trackedJobs: [] };
+      console.error('Error reading from MongoDB for user:', userId, err);
+      return { settings: { demoMode: true }, trackedJobs: [] };
     }
   } else {
     initDb();
     try {
       const data = fs.readFileSync(DB_FILE, 'utf8');
-      return JSON.parse(data);
+      const db = JSON.parse(data);
+      if (!db.users) db.users = {};
+      if (!db.users[userId]) {
+        db.users[userId] = {
+          settings: {
+            email: '',
+            password: '',
+            host: 'imap.gmail.com',
+            port: 993,
+            tls: true,
+            daysToFetch: 30,
+            limit: 100,
+            demoMode: true
+          },
+          trackedJobs: []
+        };
+      }
+      
+      const userDb = db.users[userId];
+      const settings = { ...userDb.settings };
+      if (settings.password) {
+        settings.password = decrypt(settings.password);
+      }
+      
+      return {
+        settings,
+        trackedJobs: userDb.trackedJobs || []
+      };
     } catch (error) {
-      console.error('Error reading database file:', error);
-      return { settings: {}, trackedJobs: [] };
+      console.error('Error reading database file for user:', userId, error);
+      return { settings: { demoMode: true }, trackedJobs: [] };
     }
   }
 }
 
-// Asynchronous DB writer with MongoDB fallback & Sync Deleted
-async function writeDb(data) {
+// Asynchronous DB writer isolated by userId
+async function writeDb(userId, data) {
   const isMongo = await connectMongo();
+  
+  let encryptedPassword = '';
+  if (data.settings && data.settings.password) {
+    encryptedPassword = encrypt(data.settings.password);
+  }
   
   if (isMongo) {
     try {
       if (data.settings) {
-        await SettingsModel.findOneAndUpdate({}, data.settings, { upsert: true, new: true });
+        const settingsToSave = { ...data.settings, userId, password: encryptedPassword };
+        await SettingsModel.findOneAndUpdate({ userId }, settingsToSave, { upsert: true, new: true });
       }
       if (data.trackedJobs) {
         const jobIds = data.trackedJobs.map(j => j.id);
-        await TrackedJobModel.deleteMany({ id: { $nin: jobIds } });
+        await TrackedJobModel.deleteMany({ userId, id: { $nin: jobIds } });
         for (const job of data.trackedJobs) {
-          await TrackedJobModel.findOneAndUpdate({ id: job.id }, job, { upsert: true, new: true });
+          const jobToSave = { ...job, userId };
+          await TrackedJobModel.findOneAndUpdate({ userId, id: job.id }, jobToSave, { upsert: true, new: true });
         }
       }
       return true;
     } catch (err) {
-      console.error('Error writing to MongoDB:', err);
+      console.error('Error writing to MongoDB for user:', userId, err);
       return false;
     }
   } else {
+    initDb();
     try {
-      fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+      const dbContent = fs.readFileSync(DB_FILE, 'utf8');
+      const db = JSON.parse(dbContent);
+      if (!db.users) db.users = {};
+      
+      if (data.settings) {
+        db.users[userId].settings = { ...data.settings, password: encryptedPassword };
+      }
+      if (data.trackedJobs) {
+        db.users[userId].trackedJobs = data.trackedJobs;
+      }
+      
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
       return true;
     } catch (error) {
-      console.error('Error writing database file:', error);
+      console.error('Error writing database file for user:', userId, error);
       return false;
     }
   }
@@ -319,45 +411,37 @@ function parseJobEmail(subject, body, from, date) {
   const cleanBody = (body || '').toLowerCase();
   const cleanFrom = (from || '').trim();
 
-  // 1. Extract Company Name
   let company = 'Unknown Company';
-  // Try to parse from sender name: "Company Careers <careers@company.com>" -> "Company Careers"
   const senderMatch = cleanFrom.match(/^"?([^"<]+)"?\s*<[^>]+>/);
   if (senderMatch) {
     let name = senderMatch[1].trim();
-    // Clean up common suffix
     name = name.replace(/(Recruiting|Careers|Jobs|Talent|HR|No-Reply|Noreply|Notification|HR Team|Team)\b/gi, '').trim();
-    name = name.replace(/["']/g, ''); // strip quotes
+    name = name.replace(/["']/g, '');
     if (name.length > 1) {
       company = name;
     }
   }
 
-  // If company is still unknown, try domain extraction
   if (company === 'Unknown Company') {
     const domainMatch = cleanFrom.match(/@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
     if (domainMatch) {
       let domain = domainMatch[1].toLowerCase();
-      // Remove common subdomains
       domain = domain.replace(/^(careers|jobs|recruiting|hr|noreply|mail|mail1|info)\./, '');
       const parts = domain.split('.');
       if (parts.length >= 2) {
-        let name = parts[parts.length - 2]; // e.g. stripe from stripe.com
+        let name = parts[parts.length - 2];
         if (['co', 'com', 'org', 'net', 'edu', 'gov'].includes(name) && parts.length > 2) {
           name = parts[parts.length - 3];
         }
-        // Capitalize
         company = name.charAt(0).toUpperCase() + name.slice(1);
       }
     }
   }
 
-  // Specific common company cleanups
   if (company.toLowerCase() === 'gmail' || company.toLowerCase() === 'outlook' || company.toLowerCase() === 'yahoo') {
     company = 'Unknown Company';
   }
 
-  // Check if subject lists the company, e.g. "Stripe: Thank you..." or "Google Application"
   const knownCompanies = ['Google', 'Meta', 'Stripe', 'OpenAI', 'Microsoft', 'Amazon', 'Apple', 'Netflix', 'Tesla', 'Airbnb', 'Uber', 'Lyft', 'Coinbase', 'GitHub', 'Figma', 'Canva', 'LinkedIn', 'Salesforce', 'Adobe', 'TikTok', 'Zoom'];
   for (const kc of knownCompanies) {
     if (cleanSubject.toLowerCase().includes(kc.toLowerCase())) {
@@ -366,8 +450,7 @@ function parseJobEmail(subject, body, from, date) {
     }
   }
 
-  // 2. Extract Job Role
-  let role = 'Software Engineer'; // Default fallback
+  let role = 'Software Engineer';
   const roleRegexes = [
     /(software engineer|software developer|swe|full stack developer|fullstack developer|full stack engineer|frontend engineer|frontend developer|backend engineer|backend developer|devops engineer|site reliability engineer|sre|cloud engineer|platform engineer)\b/i,
     /(data scientist|data analyst|data engineer|machine learning engineer|ml engineer|ai engineer|ai researcher|nlp researcher)\b/i,
@@ -381,7 +464,6 @@ function parseJobEmail(subject, body, from, date) {
   ];
 
   let matchedRole = null;
-  // Search in subject first
   for (const regex of roleRegexes) {
     const match = cleanSubject.match(regex);
     if (match) {
@@ -389,7 +471,6 @@ function parseJobEmail(subject, body, from, date) {
       break;
     }
   }
-  // Search in body if not found in subject
   if (!matchedRole) {
     for (const regex of roleRegexes) {
       const match = cleanBody.match(regex);
@@ -401,53 +482,43 @@ function parseJobEmail(subject, body, from, date) {
   }
 
   if (matchedRole) {
-    // Capitalize first letter of words
     role = matchedRole.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
   } else {
-    // Attempt to extract noun phrases from subject as a fallback
-    // E.g., "Application to [Role]" or "For [Role]"
     const roleFallbackMatch = cleanSubject.match(/(?:for|position of|role of|apply to|regarding)\s+([^-,:|(|)]+)/i);
     if (roleFallbackMatch && roleFallbackMatch[1].trim().length > 3) {
       role = roleFallbackMatch[1].trim().split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
     }
   }
 
-  // Clean role up from phrases like "at Google"
   role = role.replace(/\b(at|for|in|with)\s+[A-Z][a-zA-Z]+\b/g, '').trim();
   if (role.length > 50) role = role.substring(0, 50) + '...';
 
-  // 3. Classify Category
-  let category = 'Update'; // Default category
+  let category = 'Update';
 
-  // Offer indicators
   if (
     cleanSubject.match(/(offer|congratulations|pleased to offer|joining us|offer letter|employment agreement)/i) ||
     (cleanBody.includes('offer of employment') || cleanBody.includes('thrilled to extend an offer') || cleanBody.includes('pleased to offer you') || cleanBody.includes('offer letter'))
   ) {
     category = 'Offer';
   }
-  // Rejection indicators
   else if (
     cleanSubject.match(/(rejection|update regarding|status update|application status|not moving forward)/i) && 
     (cleanBody.includes('not moving forward') || cleanBody.includes('unfortunately') || cleanBody.includes('other candidates') || cleanBody.includes('decided to pursue') || cleanBody.includes('regret to inform') || cleanBody.includes('unable to offer') || cleanBody.includes('not selected'))
   ) {
     category = 'Rejection';
   }
-  // Interview indicators
   else if (
     cleanSubject.match(/(interview|schedule|screen|discussion|phone call|video call|zoom|chat|meet with)/i) ||
     cleanBody.includes('schedule a time') || cleanBody.includes('interview invitation') || cleanBody.includes('phone screen') || cleanBody.includes('technical screen') || cleanBody.includes('chat with') || cleanBody.includes('speak with you') || cleanBody.includes('scheduler') || cleanBody.includes('coderpad') || cleanBody.includes('calendly')
   ) {
     category = 'Interview';
   }
-  // Assessment indicators
   else if (
     cleanSubject.match(/(assessment|test|challenge|hackerrank|codility|codesignal|exam|quiz)/i) ||
     cleanBody.includes('online challenge') || cleanBody.includes('online assessment') || cleanBody.includes('hackerrank') || cleanBody.includes('codility') || cleanBody.includes('codesignal') || cleanBody.includes('coding test') || cleanBody.includes('technical challenge') || cleanBody.includes('take-home') || cleanBody.includes('take home')
   ) {
     category = 'Assessment';
   }
-  // Applied/Confirmation indicators
   else if (
     cleanSubject.match(/(applied|received|confirm|thank you for applying|submission)/i) ||
     cleanBody.includes('thank you for applying') || cleanBody.includes('application has been received') || cleanBody.includes('received your application') || cleanBody.includes('successful submission') || cleanBody.includes('applied to')
@@ -455,29 +526,199 @@ function parseJobEmail(subject, body, from, date) {
     category = 'Applied';
   }
 
-  // Double check rejection keywords in body if it was labeled applied or update
   if ((category === 'Applied' || category === 'Update') && 
       (cleanBody.includes('unfortunately') && (cleanBody.includes('not moving forward') || cleanBody.includes('pursue other') || cleanBody.includes('wish you the best')))) {
     category = 'Rejection';
   }
 
-  return {
-    category,
-    company,
-    role
-  };
+  return { category, company, role };
 }
 
-// ----------------- API ENDPOINTS -----------------
+// ----------------- AUTHENTICATION MIDDLEWARE & ENDPOINTS -----------------
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Authorization required. Please log in.' });
+  }
+  
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      return res.status(403).json({ success: false, message: 'Session expired or invalid login.' });
+    }
+    req.userId = decoded.userId;
+    next();
+  });
+}
+
+// Signup Endpoint
+app.post('/api/auth/signup', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ success: false, message: 'Email and password are required.' });
+  }
+
+  const isMongo = await connectMongo();
+  let userId;
+  
+  if (isMongo) {
+    try {
+      const existingUser = await UserModel.findOne({ email: email.toLowerCase() });
+      if (existingUser) {
+        return res.status(400).json({ success: false, message: 'An account with this email already exists.' });
+      }
+      
+      const passwordHash = await bcrypt.hash(password, 10);
+      const newUser = await UserModel.create({
+        email: email.toLowerCase(),
+        password: passwordHash
+      });
+      userId = newUser._id.toString();
+    } catch (err) {
+      console.error('MongoDB Signup Error:', err);
+      return res.status(500).json({ success: false, message: 'Database signup error.' });
+    }
+  } else {
+    initDb();
+    try {
+      const dbContent = fs.readFileSync(DB_FILE, 'utf8');
+      const db = JSON.parse(dbContent);
+      if (!db.localUsers) db.localUsers = [];
+      
+      const existing = db.localUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
+      if (existing) {
+        return res.status(400).json({ success: false, message: 'An account with this email already exists.' });
+      }
+      
+      userId = 'user-' + Date.now();
+      const passwordHash = await bcrypt.hash(password, 10);
+      
+      db.localUsers.push({
+        id: userId,
+        email: email.toLowerCase(),
+        password: passwordHash,
+        createdAt: new Date().toISOString()
+      });
+      
+      fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf8');
+    } catch (err) {
+      console.error('Local JSON Signup Error:', err);
+      return res.status(500).json({ success: false, message: 'Local database signup error.' });
+    }
+  }
+  
+  // Seed dynamic Demo Mode data for new sign-ups immediately
+  const initialData = {
+    settings: {
+      email: '',
+      password: '',
+      host: 'imap.gmail.com',
+      port: 993,
+      tls: true,
+      daysToFetch: 30,
+      limit: 100,
+      demoMode: true
+    },
+    trackedJobs: [
+      {
+        id: 'mock-auto-1',
+        company: 'OpenAI',
+        role: 'Software Engineer Intern',
+        status: 'Offer',
+        dateApplied: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString().split('T')[0],
+        notes: 'Preloaded sample offer dashboard demo.',
+        emailId: 'mock-1',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: 'mock-auto-2',
+        company: 'Meta',
+        role: 'Software Engineer',
+        status: 'Interviewing',
+        dateApplied: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString().split('T')[0],
+        notes: 'Preloaded sample interview schedule demo.',
+        emailId: 'mock-2',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    ]
+  };
+  
+  await writeDb(userId, initialData);
+  
+  const token = jwt.sign({ userId, email: email.toLowerCase() }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ success: true, token, user: { email: email.toLowerCase(), userId } });
+});
+
+// Login Endpoint
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ success: false, message: 'Email and password are required.' });
+  }
+
+  const isMongo = await connectMongo();
+  let userRecord;
+  
+  if (isMongo) {
+    try {
+      const user = await UserModel.findOne({ email: email.toLowerCase() });
+      if (!user) {
+        return res.status(400).json({ success: false, message: 'Invalid email or password.' });
+      }
+      const match = await bcrypt.compare(password, user.password);
+      if (!match) {
+        return res.status(400).json({ success: false, message: 'Invalid email or password.' });
+      }
+      userRecord = { userId: user._id.toString(), email: user.email };
+    } catch (err) {
+      console.error('MongoDB Login Error:', err);
+      return res.status(500).json({ success: false, message: 'Database login error.' });
+    }
+  } else {
+    initDb();
+    try {
+      const dbContent = fs.readFileSync(DB_FILE, 'utf8');
+      const db = JSON.parse(dbContent);
+      if (!db.localUsers) db.localUsers = [];
+      
+      const user = db.localUsers.find(u => u.email.toLowerCase() === email.toLowerCase());
+      if (!user) {
+        return res.status(400).json({ success: false, message: 'Invalid email or password.' });
+      }
+      
+      const match = await bcrypt.compare(password, user.password);
+      if (!match) {
+        return res.status(400).json({ success: false, message: 'Invalid email or password.' });
+      }
+      
+      userRecord = { userId: user.id, email: user.email };
+    } catch (err) {
+      console.error('Local JSON Login Error:', err);
+      return res.status(500).json({ success: false, message: 'Local database login error.' });
+    }
+  }
+  
+  const token = jwt.sign({ userId: userRecord.userId, email: userRecord.email }, JWT_SECRET, { expiresIn: '7d' });
+  res.json({ success: true, token, user: userRecord });
+});
+
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  res.json({ success: true, userId: req.userId });
+});
+
+// ----------------- STANDARD ISOLATED API ENDPOINTS -----------------
 
 // Get settings
-app.get('/api/settings', async (req, res) => {
-  const db = await readDb();
-  // Don't return password in plain text for safety
+app.get('/api/settings', authenticateToken, async (req, res) => {
+  const db = await readDb(req.userId);
   const safeSettings = { ...db.settings };
   if (safeSettings.password) {
     safeSettings.hasPassword = true;
-    safeSettings.password = '********'; // Mask
+    safeSettings.password = '********';
   } else {
     safeSettings.hasPassword = false;
   }
@@ -485,29 +726,28 @@ app.get('/api/settings', async (req, res) => {
 });
 
 // Update settings
-app.post('/api/settings', async (req, res) => {
-  const db = await readDb();
+app.post('/api/settings', authenticateToken, async (req, res) => {
+  const db = await readDb(req.userId);
   const newSettings = req.body;
 
-  // If password is sent as mask '********', keep the old password
   if (newSettings.password === '********') {
     newSettings.password = db.settings.password;
   }
 
   db.settings = { ...db.settings, ...newSettings };
-  await writeDb(db);
+  await writeDb(req.userId, db);
   res.json({ success: true, message: 'Settings saved successfully' });
 });
 
 // Get tracked jobs list
-app.get('/api/tracker', async (req, res) => {
-  const db = await readDb();
+app.get('/api/tracker', authenticateToken, async (req, res) => {
+  const db = await readDb(req.userId);
   res.json(db.trackedJobs || []);
 });
 
 // Add/Update tracked job
-app.post('/api/tracker', async (req, res) => {
-  const db = await readDb();
+app.post('/api/tracker', authenticateToken, async (req, res) => {
+  const db = await readDb(req.userId);
   const job = req.body;
 
   if (!job.company || !job.role) {
@@ -521,15 +761,13 @@ app.post('/api/tracker', async (req, res) => {
   const existingIndex = db.trackedJobs.findIndex(j => j.id === job.id);
   
   if (existingIndex > -1) {
-    // Update
     db.trackedJobs[existingIndex] = { ...db.trackedJobs[existingIndex], ...job, updatedAt: new Date().toISOString() };
   } else {
-    // Create new
     const newJob = {
       id: job.id || 'job-' + Date.now(),
       company: job.company,
       role: job.role,
-      status: job.status || 'Applied', // Applied, Assessment, Interviewing, Offer, Rejected
+      status: job.status || 'Applied',
       dateApplied: job.dateApplied || new Date().toISOString().split('T')[0],
       notes: job.notes || '',
       emailId: job.emailId || null,
@@ -539,13 +777,13 @@ app.post('/api/tracker', async (req, res) => {
     db.trackedJobs.push(newJob);
   }
 
-  await writeDb(db);
+  await writeDb(req.userId, db);
   res.json({ success: true, job });
 });
 
 // Delete tracked job
-app.post('/api/tracker/delete', async (req, res) => {
-  const db = await readDb();
+app.post('/api/tracker/delete', authenticateToken, async (req, res) => {
+  const db = await readDb(req.userId);
   const { id } = req.body;
 
   if (!id) {
@@ -553,12 +791,12 @@ app.post('/api/tracker/delete', async (req, res) => {
   }
 
   db.trackedJobs = (db.trackedJobs || []).filter(j => j.id !== id);
-  await writeDb(db);
+  await writeDb(req.userId, db);
   res.json({ success: true, message: 'Job deleted' });
 });
 
 // Generate professional response template
-app.post('/api/generate-response', (req, res) => {
+app.post('/api/generate-response', authenticateToken, (req, res) => {
   const { emailBody, category, company, role } = req.body;
   
   let draft = '';
@@ -655,17 +893,14 @@ Best regards,
   res.json({ success: true, draft });
 });
 
-// Fetch Emails Endpoint (supports real IMAP or Demo Mode)
-app.get('/api/emails', async (req, res) => {
-  const db = await readDb();
+// Fetch Emails Endpoint
+app.get('/api/emails', authenticateToken, async (req, res) => {
+  const db = await readDb(req.userId);
   const settings = db.settings;
 
-  // 1. Check if Demo Mode is toggled on OR credentials are not set up yet
   if (settings.demoMode || !settings.email || !settings.password) {
     console.log('Serving high-fidelity Mock Emails (Demo Mode)');
-    // Auto-update mock email dates to be relative to the current time to feel live!
     const activeMocks = MOCK_EMAILS.map((m, idx) => {
-      // Offset matches
       const hrsAgo = [3, 24, 48, 72, 120, 150][idx] || 24;
       return {
         ...m,
@@ -682,7 +917,6 @@ app.get('/api/emails', async (req, res) => {
     });
   }
 
-  // 2. Real IMAP Fetching
   console.log(`Connecting to IMAP server ${settings.host}:${settings.port} for ${settings.email}...`);
   
   const config = {
@@ -694,7 +928,7 @@ app.get('/api/emails', async (req, res) => {
       tls: settings.tls,
       authTimeout: 10000,
       connTimeout: 15000,
-      tlsOptions: { rejectUnauthorized: false } // Avoid SSL cert issues for self-signed
+      tlsOptions: { rejectUnauthorized: false }
     }
   };
 
@@ -702,19 +936,16 @@ app.get('/api/emails', async (req, res) => {
     const connection = await imaps.connect(config);
     await connection.openBox('INBOX');
 
-    // Calculate start date based on settings.daysToFetch
     const days = settings.daysToFetch || 30;
     const dateLimit = new Date();
     dateLimit.setDate(dateLimit.getDate() - days);
     
-    // Format date for IMAP query: DD-Month-YYYY (e.g. 05-May-2026)
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const formattedDate = `${String(dateLimit.getDate()).padStart(2, '0')}-${months[dateLimit.getMonth()]}-${dateLimit.getFullYear()}`;
     
-    // We search for emails since the calculated date
     const searchCriteria = [['SINCE', formattedDate]];
     const fetchOptions = {
-      bodies: ['HEADER', 'TEXT', ''], // empty string '' fetches full MIME body
+      bodies: ['HEADER', 'TEXT', ''],
       struct: true
     };
 
@@ -725,7 +956,6 @@ app.get('/api/emails', async (req, res) => {
     const filterKeywords = ['apply', 'applied', 'application', 'intern', 'internship', 'interview', 'assessment', 'hackerrank', 'codility', 'codesignal', 'rejection', 'hiring', 'talent', 'careers', 'offer', 'congratulations', 'unfortunate', 'moving forward', 'resume', 'cv'];
 
     for (const message of messages) {
-      // Find the full body block
       const allParts = message.parts;
       const headerPart = allParts.find(p => p.which === 'HEADER');
       const fullBodyPart = allParts.find(p => p.which === '');
@@ -737,7 +967,6 @@ app.get('/api/emails', async (req, res) => {
       const from = headers.from ? headers.from[0] : 'Unknown';
       const date = headers.date ? headers.date[0] : new Date().toISOString();
 
-      // Check if subject or sender has career keywords to quickly filter out irrelevant emails before parsed
       const lowercaseSubject = subject.toLowerCase();
       const lowercaseFrom = from.toLowerCase();
       
@@ -746,16 +975,14 @@ app.get('/api/emails', async (req, res) => {
                           ['greenhouse', 'lever', 'workday', 'smartrecruiters', 'icims', 'workable', 'job', 'recruit'].some(kw => lowercaseFrom.includes(kw));
 
       if (!subjectMatch && !senderMatch) {
-        continue; // Skip standard emails to keep it focused on jobs
+        continue;
       }
 
-      // Parse the full email using mailparser
       try {
         const parsed = await simpleParser(fullBodyPart.body);
         const bodyContent = parsed.text || parsed.html || '';
         const bodySnippet = bodyContent.substring(0, 150).replace(/\s+/g, ' ') + '...';
 
-        // Filter body content for keywords again just in case (optional, subject filter is strong)
         const parsedJob = parseJobEmail(subject, bodyContent, from, date);
 
         parsedEmails.push({
@@ -768,7 +995,7 @@ app.get('/api/emails', async (req, res) => {
           category: parsedJob.category,
           company: parsedJob.company,
           role: parsedJob.role,
-          status: 'read' // Default for loaded
+          status: 'read'
         });
       } catch (err) {
         console.error(`Error parsing message UID ${message.attributes.uid}:`, err);
@@ -777,29 +1004,22 @@ app.get('/api/emails', async (req, res) => {
 
     connection.end();
 
-    // Sort emails by date descending (newest first)
     parsedEmails.sort((a, b) => new Date(b.date) - new Date(a.date));
 
-    // Limit output based on settings
     const limit = settings.limit || 100;
     const finalEmails = parsedEmails.slice(0, limit);
 
-    // Auto-update application tracker if new emails arrive!
-    // E.g. if we see an "Applied" email for a company, we check if it is already in our tracker database. 
-    // If not, we can auto-add it to save the user time!
     let autoAddedCount = 0;
     const activeTracker = db.trackedJobs || [];
     
     for (const email of finalEmails) {
       if (email.category && email.category !== 'Update' && email.company !== 'Unknown Company') {
-        // Look for existing job by company and role
         const exists = activeTracker.some(j => 
           j.company.toLowerCase() === email.company.toLowerCase() && 
           j.role.toLowerCase() === email.role.toLowerCase()
         );
 
         if (!exists) {
-          // Auto add
           let mappedStatus = 'Applied';
           if (email.category === 'Assessment') mappedStatus = 'Assessment';
           if (email.category === 'Interview') mappedStatus = 'Interviewing';
@@ -824,7 +1044,7 @@ app.get('/api/emails', async (req, res) => {
     }
 
     if (autoAddedCount > 0) {
-      await writeDb(db);
+      await writeDb(req.userId, db);
       console.log(`Auto-added ${autoAddedCount} new applications to Tracker from IMAP email scan.`);
     }
 
