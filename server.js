@@ -233,6 +233,9 @@ async function writeDb(userId, data) {
       const dbContent = fs.readFileSync(DB_FILE, 'utf8');
       const db = JSON.parse(dbContent);
       if (!db.users) db.users = {};
+      if (!db.users[userId]) {
+        db.users[userId] = { settings: {}, trackedJobs: [] };
+      }
       
       if (data.settings) {
         db.users[userId].settings = { ...data.settings, password: encryptedPassword };
