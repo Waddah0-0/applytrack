@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+  </defs>
+  <!-- Background Rounded Rect -->
+  <rect width="32" height="32" rx="8" fill="#0b111e" />
+  <rect width="30" height="30" x="1" y="1" rx="7" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="1" />
+  <!-- Pulse Line (Cyan Glow) -->
+  <polyline points="28 16 23 16 19 26 13 6 10 16 4 16" fill="none" stroke="url(#glowGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
