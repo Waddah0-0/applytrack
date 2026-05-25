@@ -48,6 +48,7 @@ const elements = {
   settingsLimit: document.getElementById('settings-limit'),
   settingsDemo: document.getElementById('settings-demo'),
   daysValueLabel: document.getElementById('days-val-display'),
+  showGuideBtn: document.getElementById('show-guide-btn'),
   
   // Tracker Board
   kanbanColumns: document.querySelectorAll('.kanban-cards-container'),
@@ -56,6 +57,7 @@ const elements = {
   closeModalBtn: document.getElementById('close-job-modal'),
   jobForm: document.getElementById('job-form'),
   jobIdInput: document.getElementById('job-id'),
+  jobEmailIdInput: document.getElementById('job-email-id'),
   jobCompanyInput: document.getElementById('job-company'),
   jobRoleInput: document.getElementById('job-role'),
   jobStatusSelect: document.getElementById('job-status'),
@@ -785,6 +787,61 @@ function renderKanbanBoard() {
       card.classList.remove('dragging');
     });
 
+    // Setup click listener to open corresponding email
+    card.addEventListener('click', () => {
+      let email = null;
+      if (job.emailId) {
+        email = state.emails.find(e => e.id === job.emailId);
+      }
+      if (!email) {
+        // Fallback: match by company and role
+        email = state.emails.find(e => e.company.toLowerCase() === job.company.toLowerCase() && e.role.toLowerCase() === job.role.toLowerCase());
+      }
+      if (!email) {
+        // Fallback 2: match by company only
+        email = state.emails.find(e => e.company.toLowerCase() === job.company.toLowerCase());
+      }
+
+      if (email) {
+        email.status = 'read';
+        state.selectedEmail = email;
+        state.activeFilter = 'All';
+        
+        // Select filter tag visually
+        const allTag = document.querySelector('.filter-tag[data-filter="All"]');
+        if (allTag) {
+          elements.filterTags.forEach(t => t.classList.remove('active'));
+          allTag.classList.add('active');
+        }
+
+        switchPanel('panel-dashboard');
+        
+        // Select active panel button visually
+        elements.navButtons.forEach(b => {
+          if (b.getAttribute('data-target') === 'panel-dashboard') {
+            b.classList.add('active');
+          } else {
+            b.classList.remove('active');
+          }
+        });
+
+        renderEmailList();
+        renderEmailReader();
+
+        // Highlight and scroll to the active email feed card
+        setTimeout(() => {
+          const activeCard = document.querySelector('.email-feed-card.active');
+          if (activeCard) {
+            activeCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          }
+        }, 100);
+
+        showToast(`Opened corresponding email for ${job.company}`, 'success');
+      } else {
+        showToast(`No matching email found for ${job.company}.`, 'info');
+      }
+    });
+
     colContainer.appendChild(card);
   });
 
@@ -859,7 +916,7 @@ function setupModalHandlers() {
   // Add new job trigger
   elements.openAddJobBtn.addEventListener('click', () => {
     elements.jobIdInput.value = '';
-    elements.jobEmailIdInput = '';
+    elements.jobEmailIdInput.value = '';
     elements.jobCompanyInput.value = '';
     elements.jobRoleInput.value = '';
     elements.jobStatusSelect.value = 'Applied';
@@ -885,6 +942,7 @@ function setupModalHandlers() {
 
     const payload = {
       id: elements.jobIdInput.value || 'job-' + Date.now(),
+      emailId: elements.jobEmailIdInput.value || null,
       company: elements.jobCompanyInput.value.trim(),
       role: elements.jobRoleInput.value.trim(),
       status: elements.jobStatusSelect.value,
@@ -943,6 +1001,7 @@ function setupModalHandlers() {
 
 function openEditJobModal(job) {
   elements.jobIdInput.value = job.id;
+  elements.jobEmailIdInput.value = job.emailId || '';
   elements.jobCompanyInput.value = job.company;
   elements.jobRoleInput.value = job.role;
   elements.jobStatusSelect.value = job.status;
