@@ -31,6 +31,14 @@
   --glow-violet: rgba(124, 58, 237, 0.12);
   --glow-blue: rgba(59, 130, 246, 0.12);
   
+  /* Card & Interactive Element Alphas */
+  --color-card-bg: rgba(255, 255, 255, 0.015);
+  --color-card-bg-hover: rgba(255, 255, 255, 0.03);
+  --color-card-bg-active: rgba(255, 255, 255, 0.04);
+  --color-card-border-hover: rgba(255, 255, 255, 0.08);
+  --color-sidebar-bg: rgba(6, 10, 18, 0.45);
+  --color-nav-hover-bg: rgba(255, 255, 255, 0.03);
+  
   /* Radii & Shadows */
   --radius-panel: 24px;
   --radius-card: 16px;
@@ -63,8 +71,16 @@ body.light-theme {
   --color-red: #DC2626;
   --color-red-glow: rgba(220, 38, 38, 0.1);
   
-  --glow-violet: rgba(124, 58, 237, 0.06);
-  --glow-blue: rgba(59, 130, 246, 0.06);
+  --glow-violet: rgba(168, 85, 247, 0.12);
+  --glow-blue: rgba(6, 182, 212, 0.12);
+  
+  /* Card & Interactive Element Alphas */
+  --color-card-bg: rgba(15, 23, 42, 0.02);
+  --color-card-bg-hover: rgba(15, 23, 42, 0.04);
+  --color-card-bg-active: rgba(15, 23, 42, 0.06);
+  --color-card-border-hover: rgba(15, 23, 42, 0.08);
+  --color-sidebar-bg: rgba(255, 255, 255, 0.65);
+  --color-nav-hover-bg: rgba(15, 23, 42, 0.03);
   
   --shadow-glass: 0 8px 32px 0 rgba(15, 23, 42, 0.08);
 }
@@ -129,8 +145,8 @@ body:not(.landing-active) {
 }
 
 body.light-theme .mesh-glow {
-  mix-blend-mode: multiply;
-  opacity: 0.45;
+  mix-blend-mode: normal;
+  opacity: 0.8;
 }
 
 .blob-violet {
@@ -874,7 +890,7 @@ body.light-theme .floating-group input:not(:placeholder-shown) ~ label {
 
 /* Sidebar Navigation */
 .sidebar {
-  background: rgba(6, 10, 18, 0.45);
+  background: var(--color-sidebar-bg);
   backdrop-filter: blur(20px);
   border-right: 1px solid var(--color-glass-border);
   padding: 32px 24px;
@@ -913,7 +929,7 @@ body.light-theme .floating-group input:not(:placeholder-shown) ~ label {
 }
 
 .nav-btn:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-nav-hover-bg);
   color: var(--color-text-primary);
 }
 
@@ -1251,7 +1267,7 @@ body.light-theme .sun-icon { display: block; }
 }
 
 .filter-tag {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-card-bg);
   border: 1px solid var(--color-glass-border);
   color: var(--color-text-secondary);
   font-size: 10px;
@@ -1264,7 +1280,7 @@ body.light-theme .sun-icon { display: block; }
 }
 
 .filter-tag:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-card-bg-hover);
 }
 
 .filter-tag.active {
@@ -1284,7 +1300,7 @@ body.light-theme .sun-icon { display: block; }
 }
 
 .email-feed-card {
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--color-card-bg);
   border: 1px solid var(--color-glass-border);
   border-radius: 12px;
   padding: 16px;
@@ -1296,12 +1312,12 @@ body.light-theme .sun-icon { display: block; }
 }
 
 .email-feed-card:hover {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: var(--color-card-bg-hover);
+  border-color: var(--color-card-border-hover);
 }
 
 .email-feed-card.active {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-card-bg-active);
   border-color: var(--color-cyan);
   box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
 }
@@ -1704,7 +1720,7 @@ body.light-theme .sun-icon { display: block; }
 
 /* Kanban Cards styling */
 .kanban-card {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--color-card-bg);
   border: 1px solid var(--color-glass-border);
   border-radius: 12px;
   padding: 14px;
@@ -1713,8 +1729,8 @@ body.light-theme .sun-icon { display: block; }
 }
 
 .kanban-card:hover {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: var(--color-card-bg-hover);
+  border-color: var(--color-card-border-hover);
   box-shadow: 0 4px 12px rgba(0,0,0,0.1);
   transform: translateY(-2px);
 }
@@ -1829,7 +1845,7 @@ body.light-theme .sun-icon { display: block; }
 }
 
 .tmpl-btn {
-  background: rgba(255, 255, 255, 0.015);
+  background: var(--color-card-bg);
   border: 1px solid var(--color-glass-border);
   color: var(--color-text-secondary);
   font-size: 11px;
@@ -1842,7 +1858,7 @@ body.light-theme .sun-icon { display: block; }
 }
 
 .tmpl-btn:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-card-bg-hover);
   color: var(--color-text-primary);
 }
 
