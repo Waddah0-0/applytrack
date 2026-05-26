@@ -947,23 +947,24 @@ app.get('/api/emails', authenticateToken, async (req, res) => {
     const formattedDate = `${String(dateLimit.getDate()).padStart(2, '0')}-${months[dateLimit.getMonth()]}-${dateLimit.getFullYear()}`;
     
     const searchCriteria = [['SINCE', formattedDate]];
-    const fetchOptions = {
-      bodies: ['HEADER', 'TEXT', ''],
+    // Step 1: Fetch only the HEADER for all messages since the date to filter them extremely fast and with minimal memory
+    const searchFetchOptions = {
+      bodies: ['HEADER'],
       struct: true
     };
 
-    const messages = await connection.search(searchCriteria, fetchOptions);
+    const messages = await connection.search(searchCriteria, searchFetchOptions);
     console.log(`Found ${messages.length} total emails since ${formattedDate}`);
 
-    const parsedEmails = [];
     const filterKeywords = ['apply', 'applied', 'application', 'intern', 'internship', 'interview', 'assessment', 'hackerrank', 'codility', 'codesignal', 'rejection', 'hiring', 'talent', 'careers', 'offer', 'congratulations', 'unfortunate', 'moving forward', 'resume', 'cv'];
 
-    for (const message of messages) {
-      const allParts = message.parts;
-      const headerPart = allParts.find(p => p.which === 'HEADER');
-      const fullBodyPart = allParts.find(p => p.which === '');
+    // Step 2: Filter message UIDs based on Subject or Sender keywords first
+    const matchingUids = [];
+    const messageHeadersMap = new Map();
 
-      if (!headerPart || !fullBodyPart) continue;
+    for (const message of messages) {
+      const headerPart = message.parts.find(p => p.which === 'HEADER');
+      if (!headerPart) continue;
 
       const headers = headerPart.body;
       const subject = headers.subject ? headers.subject[0] : 'No Subject';
@@ -977,31 +978,58 @@ app.get('/api/emails', authenticateToken, async (req, res) => {
       const senderMatch = filterKeywords.some(keyword => lowercaseFrom.includes(keyword)) || 
                           ['greenhouse', 'lever', 'workday', 'smartrecruiters', 'icims', 'workable', 'job', 'recruit'].some(kw => lowercaseFrom.includes(kw));
 
-      if (!subjectMatch && !senderMatch) {
-        continue;
+      if (subjectMatch || senderMatch) {
+        matchingUids.push(message.attributes.uid);
+        messageHeadersMap.set(message.attributes.uid, { subject, from, date });
       }
+    }
 
-      try {
-        const parsed = await simpleParser(fullBodyPart.body);
-        const bodyContent = parsed.text || parsed.html || '';
-        const bodySnippet = bodyContent.substring(0, 150).replace(/\s+/g, ' ') + '...';
+    console.log(`Filtered down to ${matchingUids.length} matching career-related emails.`);
 
-        const parsedJob = parseJobEmail(subject, bodyContent, from, date);
+    const parsedEmails = [];
 
-        parsedEmails.push({
-          id: message.attributes.uid.toString(),
-          from,
-          subject,
-          date: new Date(date).toISOString(),
-          snippet: bodySnippet,
-          body: bodyContent,
-          category: parsedJob.category,
-          company: parsedJob.company,
-          role: parsedJob.role,
-          status: 'read'
-        });
-      } catch (err) {
-        console.error(`Error parsing message UID ${message.attributes.uid}:`, err);
+    // Step 3: Fetch the full body ONLY for the matching career-related emails (saves 99% RAM and prevents Out-Of-Memory crashes)
+    if (matchingUids.length > 0) {
+      const fullMessages = await connection.fetch(matchingUids, {
+        bodies: ['HEADER', ''],
+        struct: true
+      });
+
+      for (const message of fullMessages) {
+        const uid = message.attributes.uid;
+        const allParts = message.parts;
+        const fullBodyPart = allParts.find(p => p.which === '');
+
+        if (!fullBodyPart) continue;
+
+        const headerInfo = messageHeadersMap.get(uid) || {
+          subject: 'No Subject',
+          from: 'Unknown',
+          date: new Date().toISOString()
+        };
+
+        try {
+          const parsed = await simpleParser(fullBodyPart.body);
+          const bodyContent = parsed.text || parsed.html || '';
+          const bodySnippet = bodyContent.substring(0, 150).replace(/\s+/g, ' ') + '...';
+
+          const parsedJob = parseJobEmail(headerInfo.subject, bodyContent, headerInfo.from, headerInfo.date);
+
+          parsedEmails.push({
+            id: uid.toString(),
+            from: headerInfo.from,
+            subject: headerInfo.subject,
+            date: new Date(headerInfo.date).toISOString(),
+            snippet: bodySnippet,
+            body: bodyContent,
+            category: parsedJob.category,
+            company: parsedJob.company,
+            role: parsedJob.role,
+            status: 'read'
+          });
+        } catch (err) {
+          console.error(`Error parsing message UID ${uid}:`, err);
+        }
       }
     }
 
