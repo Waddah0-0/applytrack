@@ -20,7 +20,21 @@ const updateSettings = async (req, res) => {
     newSettings.password = db.settings.password;
   }
 
+  // Remove demoMode as we are completely deleting it
+  delete newSettings.demoMode;
+
+  const emailChanged = (newSettings.email || '').toLowerCase() !== (db.settings.email || '').toLowerCase();
+  const passwordChanged = newSettings.password !== db.settings.password;
+  const hostChanged = (newSettings.host || '') !== (db.settings.host || '');
+  const portChanged = Number(newSettings.port) !== Number(db.settings.port);
+
   db.settings = { ...db.settings, ...newSettings };
+
+  // If email configuration or connection parameters have changed, clear tracked jobs
+  if (emailChanged || passwordChanged || hostChanged || portChanged) {
+    db.trackedJobs = [];
+  }
+
   await writeDb(req.userId, db);
   res.json({ success: true, message: 'Settings saved successfully' });
 };
@@ -78,4 +92,11 @@ const deleteTrackerJob = async (req, res) => {
   res.json({ success: true, message: 'Job deleted' });
 };
 
-module.exports = { getSettings, updateSettings, getTracker, updateTracker, deleteTrackerJob };
+const clearTracker = async (req, res) => {
+  const db = await readDb(req.userId);
+  db.trackedJobs = [];
+  await writeDb(req.userId, db);
+  res.json({ success: true, message: 'Tracker and dashboard successfully cleared.' });
+};
+
+module.exports = { getSettings, updateSettings, getTracker, updateTracker, deleteTrackerJob, clearTracker };

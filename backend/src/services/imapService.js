@@ -192,7 +192,7 @@ const fetchEmailsFromImap = async (settings) => {
   const parsedEmails = [];
 
   if (matchingUids.length > 0) {
-    const fullMessages = await connection.fetch(matchingUids, {
+    const fullMessages = await connection.search([['UID', matchingUids.join(',')]], {
       bodies: ['HEADER', ''],
       struct: true
     });

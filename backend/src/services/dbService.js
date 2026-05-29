@@ -18,8 +18,7 @@ async function readDb(userId) {
           port: 993,
           tls: true,
           daysToFetch: 30,
-          limit: 100,
-          demoMode: true
+          limit: 100
         });
       }
       const jobsDocs = await TrackedJobModel.find({ userId });
@@ -35,7 +34,7 @@ async function readDb(userId) {
       };
     } catch (err) {
       console.error('Error reading from MongoDB for user:', userId, err);
-      return { settings: { demoMode: true }, trackedJobs: [] };
+      return { settings: {}, trackedJobs: [] };
     }
   } else {
     initLocalDb();
@@ -52,8 +51,7 @@ async function readDb(userId) {
             port: 993,
             tls: true,
             daysToFetch: 30,
-            limit: 100,
-            demoMode: true
+            limit: 100
           },
           trackedJobs: []
         };
@@ -71,7 +69,7 @@ async function readDb(userId) {
       };
     } catch (error) {
       console.error('Error reading database file for user:', userId, error);
-      return { settings: { demoMode: true }, trackedJobs: [] };
+      return { settings: {}, trackedJobs: [] };
     }
   }
 }

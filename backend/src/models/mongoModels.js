@@ -14,8 +14,7 @@ const settingsSchema = new mongoose.Schema({
   port: { type: Number, default: 993 },
   tls: { type: Boolean, default: true },
   daysToFetch: { type: Number, default: 30 },
-  limit: { type: Number, default: 100 },
-  demoMode: { type: Boolean, default: true }
+  limit: { type: Number, default: 100 }
 });
 
 const trackedJobSchema = new mongoose.Schema({

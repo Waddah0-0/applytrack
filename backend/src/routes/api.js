@@ -1,6 +1,6 @@
 const express = require('express');
 const { signup, login, me } = require('../controllers/authController');
-const { getSettings, updateSettings, getTracker, updateTracker, deleteTrackerJob } = require('../controllers/trackerController');
+const { getSettings, updateSettings, getTracker, updateTracker, deleteTrackerJob, clearTracker } = require('../controllers/trackerController');
 const { getEmails, generateResponse } = require('../controllers/emailController');
 const { authenticateToken } = require('../middlewares/auth');
 
@@ -16,6 +16,7 @@ router.post('/settings', authenticateToken, updateSettings);
 router.get('/tracker', authenticateToken, getTracker);
 router.post('/tracker', authenticateToken, updateTracker);
 router.post('/tracker/delete', authenticateToken, deleteTrackerJob);
+router.post('/tracker/clear', authenticateToken, clearTracker);
 
 router.get('/emails', authenticateToken, getEmails);
 router.post('/generate-response', authenticateToken, generateResponse);

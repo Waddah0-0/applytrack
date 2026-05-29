@@ -80,86 +80,88 @@ const getEmails = async (req, res) => {
   const db = await readDb(req.userId);
   const settings = db.settings;
 
-  if (settings.demoMode || !settings.email || !settings.password) {
-    const activeMocks = MOCK_EMAILS.map((m, idx) => {
-      const hrsAgo = [3, 24, 48, 72, 120, 150][idx] || 24;
-      return {
-        ...m,
-        date: new Date(Date.now() - 1000 * 60 * 60 * hrsAgo).toISOString()
-      };
-    });
+  if (!settings || !settings.email || !settings.password) {
     return res.json({
       success: true,
-      isDemo: true,
-      emails: activeMocks,
-      message: (!settings.email || !settings.password)
-        ? 'Showing demo data because email credentials are not fully configured in Settings.'
-        : 'Demo mode is active.'
+      isDemo: false,
+      emails: [],
+      message: 'Please configure your IMAP credentials in Settings to sync your mailbox.'
     });
   }
 
   try {
     const finalEmails = await fetchEmailsFromImap(settings);
     let autoAddedCount = 0;
+    let hasChanges = false;
     const activeTracker = db.trackedJobs || [];
 
-    for (const email of finalEmails) {
-      if (email.category && email.category !== 'Update' && email.company !== 'Unknown Company') {
-        // Bug Fix: Check if job exists based on company and role to avoid duplicates
-        const exists = activeTracker.some(j =>
+    // Filter fetched emails to only include valid trackable application emails (exclude general updates and unknown companies)
+    const trackableEmails = finalEmails.filter(email => 
+      email.category && 
+      email.category !== 'Update' && 
+      email.company !== 'Unknown Company'
+    );
+
+    for (const email of trackableEmails) {
+      // Check if job exists based on company and role to avoid duplicates
+      const exists = activeTracker.some(j =>
+        j.company.toLowerCase() === email.company.toLowerCase() &&
+        j.role.toLowerCase() === email.role.toLowerCase()
+      );
+
+      if (!exists) {
+        let mappedStatus = 'Applied';
+        if (email.category === 'Assessment') mappedStatus = 'Assessment';
+        if (email.category === 'Interview') mappedStatus = 'Interviewing';
+        if (email.category === 'Offer') mappedStatus = 'Offer';
+        if (email.category === 'Rejection') mappedStatus = 'Rejected';
+
+        const newJob = {
+          id: 'job-auto-' + email.id,
+          company: email.company,
+          role: email.role,
+          status: mappedStatus,
+          dateApplied: email.date.split('T')[0],
+          notes: `Auto-detected from email: "${email.subject}"`,
+          emailId: email.id,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        db.trackedJobs.push(newJob);
+        autoAddedCount++;
+        hasChanges = true;
+      } else {
+        // Update status if email represents a newer state
+        const existingJobIndex = activeTracker.findIndex(j =>
           j.company.toLowerCase() === email.company.toLowerCase() &&
           j.role.toLowerCase() === email.role.toLowerCase()
         );
+        if (existingJobIndex > -1) {
+          let currentStatus = activeTracker[existingJobIndex].status;
+          let newStatus = currentStatus;
 
-        if (!exists) {
-          let mappedStatus = 'Applied';
-          if (email.category === 'Assessment') mappedStatus = 'Assessment';
-          if (email.category === 'Interview') mappedStatus = 'Interviewing';
-          if (email.category === 'Offer') mappedStatus = 'Offer';
-          if (email.category === 'Rejection') mappedStatus = 'Rejected';
+          if (email.category === 'Assessment' && currentStatus === 'Applied') newStatus = 'Assessment';
+          if (email.category === 'Interview' && (currentStatus === 'Applied' || currentStatus === 'Assessment')) newStatus = 'Interviewing';
+          if (email.category === 'Offer') newStatus = 'Offer';
+          if (email.category === 'Rejection') newStatus = 'Rejected';
 
-          const newJob = {
-            id: 'job-auto-' + email.id,
-            company: email.company,
-            role: email.role,
-            status: mappedStatus,
-            dateApplied: email.date.split('T')[0],
-            notes: `Auto-detected from email: "${email.subject}"`,
-            emailId: email.id,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          db.trackedJobs.push(newJob);
-          autoAddedCount++;
-        } else {
-            // Update status if email represents a newer state
-            const existingJobIndex = activeTracker.findIndex(j => j.company.toLowerCase() === email.company.toLowerCase() && j.role.toLowerCase() === email.role.toLowerCase());
-            if (existingJobIndex > -1) {
-                let currentStatus = activeTracker[existingJobIndex].status;
-                let newStatus = currentStatus;
-
-                if (email.category === 'Assessment' && currentStatus === 'Applied') newStatus = 'Assessment';
-                if (email.category === 'Interview' && (currentStatus === 'Applied' || currentStatus === 'Assessment')) newStatus = 'Interviewing';
-                if (email.category === 'Offer') newStatus = 'Offer';
-                if (email.category === 'Rejection') newStatus = 'Rejected';
-
-                if (newStatus !== currentStatus) {
-                    db.trackedJobs[existingJobIndex].status = newStatus;
-                    db.trackedJobs[existingJobIndex].updatedAt = new Date().toISOString();
-                }
-            }
+          if (newStatus !== currentStatus) {
+            db.trackedJobs[existingJobIndex].status = newStatus;
+            db.trackedJobs[existingJobIndex].updatedAt = new Date().toISOString();
+            hasChanges = true;
+          }
         }
       }
     }
 
-    if (autoAddedCount > 0) {
+    if (hasChanges) {
       await writeDb(req.userId, db);
     }
 
     res.json({
       success: true,
       isDemo: false,
-      emails: finalEmails,
+      emails: trackableEmails,
       autoAddedCount
     });
 

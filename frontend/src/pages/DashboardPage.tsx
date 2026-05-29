@@ -54,9 +54,15 @@ export default function DashboardPage() {
       />
 
       <div className="p-8 flex-1 flex flex-col gap-8 overflow-y-auto">
-        {emailsData?.isDemo && (
-          <div className="bg-brand-indigo/10 border border-brand-indigo/20 text-brand-indigo px-4 py-3 rounded-lg flex items-center justify-between">
-            <span className="font-medium text-sm">Demo Mode Active. Configure your IMAP settings to see live data.</span>
+        {emails.length === 0 && (
+          <div className="bg-brand-indigo/10 border border-brand-indigo/20 text-brand-indigo px-4 py-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h4 className="font-semibold text-sm text-white">Your Mailbox is Empty</h4>
+              <p className="text-xs text-slate-400 mt-1">Configure your IMAP credentials in Settings to sync and automatically parse your job applications.</p>
+            </div>
+            <a href="/settings" className="px-4 py-2 rounded-lg bg-primary text-black font-semibold text-xs hover:bg-primary/80 transition-all text-center">
+              Go to Settings
+            </a>
           </div>
         )}
 
@@ -175,7 +181,20 @@ export default function DashboardPage() {
                           <p className="text-xs text-slate-400">To: you</p>
                         </div>
                       </div>
-                      <span className="text-xs text-slate-500">{new Date(selectedEmail.date).toLocaleString()}</span>
+                      <div className="flex items-center gap-4">
+                        <a
+                          href={`https://mail.google.com/mail/u/0/#search/subject%3A%22${encodeURIComponent(selectedEmail.subject)}%22`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/20 text-primary text-xs font-semibold hover:bg-primary/20 transition-all cursor-pointer shadow-pulse-glow"
+                        >
+                          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z" />
+                          </svg>
+                          View in Gmail
+                        </a>
+                        <span className="text-xs text-slate-500">{new Date(selectedEmail.date).toLocaleString()}</span>
+                      </div>
                     </div>
                   </div>
                   <div className="flex-1 overflow-y-auto p-6 text-sm text-slate-300 font-mono whitespace-pre-wrap leading-relaxed">

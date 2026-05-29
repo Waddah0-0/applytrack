@@ -11,6 +11,7 @@ export default function LandingPage() {
   const [isLogin, setIsLogin] = useState(true)
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
 
@@ -18,6 +19,12 @@ export default function LandingPage() {
     e.preventDefault()
     setLoading(true)
     setError("")
+
+    if (!isLogin && password !== confirmPassword) {
+      setError("Passwords do not match")
+      setLoading(false)
+      return
+    }
 
     try {
       const endpoint = isLogin ? "/auth/login" : "/auth/signup"
@@ -43,9 +50,9 @@ export default function LandingPage() {
             initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}
             className="flex items-center gap-3 mb-16"
           >
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-brand-indigo flex items-center justify-center shadow-pulse-glow">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="black" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-brand-indigo flex items-center justify-center shadow-pulse-glow shrink-0">
+              <svg className="w-5 h-5 text-black" viewBox="0 0 48 46" fill="currentColor">
+                <path d="M25.946 44.938c-.664.845-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262H10.287c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.497 0-3.578-1.842-3.578H1.237c-.92 0-1.456-1.04-.92-1.788L10.013.474c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.579 1.842 3.579h11.377c.943 0 1.473 1.088.89 1.83L25.947 44.94z" />
               </svg>
             </div>
             <span className="font-bold text-2xl tracking-tight text-white">APPLY<span className="text-primary font-light">TRACK</span></span>
@@ -127,6 +134,19 @@ export default function LandingPage() {
                 className="h-12"
               />
             </div>
+            {!isLogin && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-300">Confirm Password</label>
+                <Input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={e => setConfirmPassword(e.target.value)}
+                  required
+                  placeholder="••••••••"
+                  className="h-12"
+                />
+              </div>
+            )}
 
             <Button type="submit" className="w-full h-12 text-base mt-4" disabled={loading}>
               {loading ? "Authenticating..." : (isLogin ? "Access Pipeline" : "Register & Launch")}

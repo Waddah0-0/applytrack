@@ -69,33 +69,9 @@ const signup = async (req, res) => {
       port: 993,
       tls: true,
       daysToFetch: 30,
-      limit: 100,
-      demoMode: true
+      limit: 100
     },
-    trackedJobs: [
-      {
-        id: 'mock-auto-1',
-        company: 'OpenAI',
-        role: 'Software Engineer Intern',
-        status: 'Offer',
-        dateApplied: new Date(Date.now() - 1000 * 60 * 60 * 24 * 3).toISOString().split('T')[0],
-        notes: 'Preloaded sample offer dashboard demo.',
-        emailId: 'mock-1',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: 'mock-auto-2',
-        company: 'Meta',
-        role: 'Software Engineer',
-        status: 'Interviewing',
-        dateApplied: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString().split('T')[0],
-        notes: 'Preloaded sample interview schedule demo.',
-        emailId: 'mock-2',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ]
+    trackedJobs: []
   };
 
   await writeDb(userId, initialData);
