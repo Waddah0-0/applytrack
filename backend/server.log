@@ -1,0 +1,9 @@
+
+> job-application-email-checker@1.0.0 start
+> node src/server.js
+
+==================================================
+  🚀 Job Application Email Checker Server Ready!
+  URL: http://localhost:3001
+==================================================
+Running with local database (JSON)
